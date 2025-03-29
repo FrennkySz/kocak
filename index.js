@@ -4,6 +4,20 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
+const express = require("express");
+const app = express();
+
+app.get("/", (req, res) => {
+  res.send("Bot is running!");
+});
+
+app.listen(3000, () => console.log("Web server started on port 3000"));
+
+setInterval(() => {
+  axios.get("https://cf0f43ae-e359-49ce-a53c-ad0d5039ef73-00-wwoqu7llmryr.sisko.replit.dev/")
+    .then(() => console.log("Ping success!"))
+    .catch(err => console.log("Ping error:", err));
+}, 2 * 60 * 1000); // Ping setiap 2 menit
 
 const APIKEY = 'tYYVlHk0ii';
 const prefix = ['.', '!', '/', '#', '$'];
@@ -74,7 +88,7 @@ async function downloadImage(url) {
 }
 
 const NOTIFICATION_GROUP = '120363414092833360@g.us'; // Ganti dengan ID grup yang diinginkan
-const CHECK_INTERVAL = 30 * 60 * 1000; // Cek setiap 5 menit
+const CHECK_INTERVAL = 10 * 60 * 1000; // Cek setiap 5 menit
 
 // Tambahkan fungsi untuk mengecek update terbaru
 async function checkLatestUpdates(sock) {
