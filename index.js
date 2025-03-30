@@ -11,8 +11,6 @@ app.get("/", (req, res) => {
   res.send("Bot is running!");
 });
 
-app.listen(3000, () => console.log("Web server started on port 3000"));
-
 setInterval(() => {
   axios.get("https://cf0f43ae-e359-49ce-a53c-ad0d5039ef73-00-wwoqu7llmryr.sisko.replit.dev/")
     .then(() => console.log("Ping success!"))
