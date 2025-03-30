@@ -87,209 +87,199 @@ async function downloadImage(url) {
     return Buffer.from(response.data, 'binary');
 }
 
-const NOTIFICATION_GROUP = '1203634140928333600@g.us'; // Ganti dengan ID grup yang diinginkan
+const NOTIFICATION_GROUP = '120363414092833360@g.us'; // Ganti dengan ID grup yang diinginkan
 const CHECK_INTERVAL = 30 * 60 * 1000; // Cek setiap 5 menit
+// Simpan data terakhir di memory
+let lastNotifiedAnime = null;
 
-// Tambahkan fungsi untuk mengecek update terbaru
 async function checkLatestUpdates(sock) {
     try {
         const response = await axios.get('https://api.maelyn.tech/api/otakudesu/lastupdate?apikey=tYYVlHk0ii');
         const latestAnimes = response.data.result;
         
-        // Baca data terakhir yang sudah dinotifikasi
-        let lastNotified = {};
-        try {
-            if (fs.existsSync('last_notified.json')) {
-                lastNotified = JSON.parse(fs.readFileSync('last_notified.json', 'utf8'));
-            }
-        } catch (error) {
-            console.error('Error membaca file last_notified.json:', error);
+        if (!latestAnimes || latestAnimes.length === 0) {
+            console.log('Tidak ada data anime yang diterima');
+            return;
         }
 
-        // Cek anime baru
-        for (const anime of latestAnimes) {
-            const key = `${anime.judul}-${anime.episode}`;
-            if (!lastNotified[key]) {
+        // Ambil anime terbaru (index 0)
+        const latestAnime = latestAnimes[0];
+        const key = `${latestAnime.judul}-${latestAnime.episode}`;
+
+        // Jika ini pertama kali atau data berbeda dengan sebelumnya
+        if (!lastNotifiedAnime || 
+            lastNotifiedAnime.judul !== latestAnime.judul || 
+            lastNotifiedAnime.episode !== latestAnime.episode) {
+            
+            try {
+                // Download thumbnail
+                const thumbnailBuffer = await downloadImage(latestAnime.thumbnail);
+                
+                // Buat pesan notifikasi
+                const message = `🔥 *ANIME UPDATE!* 🔥\n\n` +
+                              `📺 *${latestAnime.judul}*\n` +
+                              `🎬 ${latestAnime.episode}\n` +
+                              `📅 ${latestAnime.tanggal}\n` +
+                              `📌 Hari: ${latestAnime.hari}\n` +
+                              `🔗 Link: ${latestAnime.link}\n\n` +
+                              `Gunakan perintah .anime untuk informasi lebih detail!`;
+
+                // Kirim notifikasi dengan thumbnail
+                await sock.sendMessage(NOTIFICATION_GROUP, {
+                    image: thumbnailBuffer,
+                    caption: message
+                });
+
+                // Tambahkan proses penambahan ke database
+                console.log(`🔄 Memulai proses penambahan ${latestAnime.judul} ke database...`);
+
                 try {
-                    // Download thumbnail
-                    const thumbnailBuffer = await downloadImage(anime.thumbnail);
-                    
-                    // Buat pesan notifikasi
-                    const message = `🔥 *ANIME UPDATE!* 🔥\n\n` +
-                                  `📺 *${anime.judul}*\n` +
-                                  `🎬 ${anime.episode}\n` +
-                                  `📅 ${anime.tanggal}\n` +
-                                  `📌 Hari: ${anime.hari}\n` +
-                                  `🔗 Link: ${anime.link}\n\n` +
-                                  `Gunakan perintah .anime untuk informasi lebih detail!`;
+                    // Ambil detail anime
+                    const detailResponse = await axios.get(`https://api.maelyn.tech/api/otakudesu/detail?url=${encodeURIComponent(latestAnime.link)}&apikey=${APIKEY}`);
+                    const details = detailResponse.data.result;
 
-                    // Kirim notifikasi dengan thumbnail
-                    await sock.sendMessage(NOTIFICATION_GROUP, {
-                        image: thumbnailBuffer,
-                        caption: message
-                    });
+                    // Buat koneksi database
+                    const connection = await createDBConnection();
 
-                    // Tambahkan proses penambahan ke database
-                    console.log(`🔄 Memulai proses penambahan ${anime.judul} ke database...`);
+                    // Cek apakah anime sudah ada di database
+                    const [existingAnime] = await connection.execute(
+                        'SELECT id FROM anime WHERE title = ?',
+                        [details.judul]
+                    );
 
-                    try {
-                        // Ambil detail anime
-                        const detailResponse = await axios.get(`https://api.maelyn.tech/api/otakudesu/detail?url=${encodeURIComponent(anime.link)}&apikey=${APIKEY}`);
-                        const details = detailResponse.data.result;
+                    let animeId;
+                    let relatedAnimeIds = [];
 
-                        // Buat koneksi database
-                        const connection = await createDBConnection();
+                    // Cari anime yang mirip
+                    const [allAnimes] = await connection.execute('SELECT id, title FROM anime');
+                    const similarAnimes = allAnimes
+                        .map(a => ({
+                            ...a,
+                            similarity: calculateSimilarity(details.judul, a.title)
+                        }))
+                        .filter(a => a.similarity > 0.3)
+                        .sort((a, b) => b.similarity - a.similarity);
 
-                        // Cek apakah anime sudah ada di database
-                        const [existingAnime] = await connection.execute(
-                            'SELECT id FROM anime WHERE title = ?',
-                            [details.judul]
+                    relatedAnimeIds = similarAnimes.map(a => a.id);
+
+                    // Tentukan rating, tipe, dan status
+                    let dbRating = 'Usia 13+';
+                    if (details.rating.includes('17')) dbRating = 'Usia 17+';
+                    else if (details.rating.includes('7')) dbRating = 'Usia 7+';
+                    else if (details.rating.includes('5')) dbRating = 'Usia 5+';
+
+                    let dbType = 'TV';
+                    if (details.tipe.includes('Movie')) dbType = 'Movie';
+                    else if (details.tipe.includes('BD')) dbType = 'BD';
+                    else if (details.tipe.includes('OVA')) dbType = 'OVA';
+
+                    let dbStatus = 'Completed';
+                    if (details.anime_status.includes('Ongoing')) dbStatus = 'Ongoing';
+                    else if (details.anime_status.includes('Upcoming')) dbStatus = 'Upcoming';
+
+                    if (existingAnime.length > 0) {
+                        animeId = existingAnime[0].id;
+                        await connection.execute(
+                            'UPDATE anime SET related_anime = ? WHERE id = ?',
+                            [relatedAnimeIds.join(','), animeId]
                         );
+                        console.log(`✅ Updated anime: ${details.judul} (ID: ${animeId})`);
+                    } else {
+                        // Insert anime baru
+                        const [result] = await connection.execute(
+                            `INSERT INTO anime (
+                                title, title_japanese, image_url, synopsis, type, 
+                                status, rating, score, duration, studio, genres, related_anime
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            [
+                                details.judul, details.japanese, details.thumbnail,
+                                details.sinopsis, dbType, dbStatus, dbRating,
+                                extractScore(details.rating), details.durasi,
+                                details.studio, details.genre, relatedAnimeIds.join(',')
+                            ]
+                        );
+                        animeId = result.insertId;
+                        console.log(`✅ Added new anime: ${details.judul} (ID: ${animeId})`);
+                    }
 
-                        let animeId;
-                        let relatedAnimeIds = [];
+                    // Proses episode
+                    if (details.epsd_url && details.epsd_url.length > 0) {
+                        for (const episode of details.epsd_url) {
+                            const episodeMatch = episode.title.match(/episode\s*(\d+)/i);
+                            if (!episodeMatch) continue;
 
-                        // Cari anime yang mirip
-                        const [allAnimes] = await connection.execute('SELECT id, title FROM anime');
-                        const similarAnimes = allAnimes
-                            .map(a => ({
-                                ...a,
-                                similarity: calculateSimilarity(details.judul, a.title)
-                            }))
-                            .filter(a => a.similarity > 0.3)
-                            .sort((a, b) => b.similarity - a.similarity);
-
-                        relatedAnimeIds = similarAnimes.map(a => a.id);
-
-                        // Tentukan rating, tipe, dan status
-                        let dbRating = 'Usia 13+';
-                        if (details.rating.includes('17')) dbRating = 'Usia 17+';
-                        else if (details.rating.includes('7')) dbRating = 'Usia 7+';
-                        else if (details.rating.includes('5')) dbRating = 'Usia 5+';
-
-                        let dbType = 'TV';
-                        if (details.tipe.includes('Movie')) dbType = 'Movie';
-                        else if (details.tipe.includes('BD')) dbType = 'BD';
-                        else if (details.tipe.includes('OVA')) dbType = 'OVA';
-
-                        let dbStatus = 'Completed';
-                        if (details.anime_status.includes('Ongoing')) dbStatus = 'Ongoing';
-                        else if (details.anime_status.includes('Upcoming')) dbStatus = 'Upcoming';
-
-                        if (existingAnime.length > 0) {
-                            animeId = existingAnime[0].id;
-                            await connection.execute(
-                                'UPDATE anime SET related_anime = ? WHERE id = ?',
-                                [relatedAnimeIds.join(','), animeId]
+                            const episodeNumber = parseInt(episodeMatch[1]);
+                            const [existingEpisode] = await connection.execute(
+                                'SELECT id FROM episodes WHERE anime_id = ? AND episode_number = ?',
+                                [animeId, episodeNumber]
                             );
-                            console.log(`✅ Updated anime: ${details.judul} (ID: ${animeId})`);
-                        } else {
-                            // Insert anime baru
-                            const [result] = await connection.execute(
-                                `INSERT INTO anime (
-                                    title, title_japanese, image_url, synopsis, type, 
-                                    status, rating, score, duration, studio, genres, related_anime
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                                [
-                                    details.judul, details.japanese, details.thumbnail,
-                                    details.sinopsis, dbType, dbStatus, dbRating,
-                                    extractScore(details.rating), details.durasi,
-                                    details.studio, details.genre, relatedAnimeIds.join(',')
-                                ]
-                            );
-                            animeId = result.insertId;
-                            console.log(`✅ Added new anime: ${details.judul} (ID: ${animeId})`);
-                        }
 
-                        // Proses episode jika ada
-                        if (details.epsd_url && details.epsd_url.length > 0) {
-                            for (const episode of details.epsd_url) {
-                                const episodeMatch = episode.title.match(/episode\s*(\d+)/i);
-                                if (!episodeMatch) continue;
-
-                                const episodeNumber = parseInt(episodeMatch[1]);
-                                const [existingEpisode] = await connection.execute(
-                                    'SELECT id FROM episodes WHERE anime_id = ? AND episode_number = ?',
-                                    [animeId, episodeNumber]
+                            if (existingEpisode.length === 0) {
+                                const streamResponse = await axios.get(
+                                    `https://api.maelyn.tech/api/otakudesu/stream?url=${encodeURIComponent(episode.epsd_url)}&apikey=${APIKEY}`
                                 );
+                                const streamData = streamResponse.data;
 
-                                if (existingEpisode.length === 0) {
-                                    const streamResponse = await axios.get(
-                                        `https://api.maelyn.tech/api/otakudesu/stream?url=${encodeURIComponent(episode.epsd_url)}&apikey=${APIKEY}`
-                                    );
-                                    const streamData = streamResponse.data;
+                                if (streamData.status === "Success") {
+                                    const qualityPriority = ['720', '480', '360'];
+                                    let selectedQuality = null;
+                                    let selectedServer = null;
 
-                                    if (streamData.status === "Success") {
-                                        const qualityPriority = ['720', '480', '360'];
-                                        let selectedQuality = null;
-                                        let selectedServer = null;
-
-                                        for (const priority of qualityPriority) {
-                                            const qualityData = streamData.result.find(q => q.quality.includes(priority));
-                                            if (qualityData) {
-                                                const validServer = qualityData.serverList.find(s => 
-                                                    !s.server.toLowerCase().includes('vidhide') && 
-                                                    !s.streamUrl.toLowerCase().includes('vidhide')
-                                                );
-                                                
-                                                if (validServer) {
-                                                    selectedQuality = qualityData;
-                                                    selectedServer = validServer;
-                                                    break;
-                                                }
+                                    for (const priority of qualityPriority) {
+                                        const qualityData = streamData.result.find(q => q.quality.includes(priority));
+                                        if (qualityData) {
+                                            const validServer = qualityData.serverList.find(s => 
+                                                !s.server.toLowerCase().includes('vidhide') && 
+                                                !s.streamUrl.toLowerCase().includes('vidhide')
+                                            );
+                                            
+                                            if (validServer) {
+                                                selectedQuality = qualityData;
+                                                selectedServer = validServer;
+                                                break;
                                             }
                                         }
+                                    }
 
-                                        if (selectedQuality && selectedServer) {
-                                            await connection.execute(
-                                                `INSERT INTO episodes (
-                                                    anime_id, episode_number, video_url,
-                                                    quality, uploaded_by
-                                                ) VALUES (?, ?, ?, ?, ?)`,
-                                                [
-                                                    animeId, episodeNumber, selectedServer.streamUrl,
-                                                    selectedQuality.quality, 'Auto Update System'
-                                                ]
-                                            );
-                                            console.log(`✅ Added episode ${episodeNumber} for ${details.judul}`);
-                                        }
+                                    if (selectedQuality && selectedServer) {
+                                        await connection.execute(
+                                            `INSERT INTO episodes (
+                                                anime_id, episode_number, video_url,
+                                                quality, uploaded_by
+                                            ) VALUES (?, ?, ?, ?, ?)`,
+                                            [
+                                                animeId, episodeNumber, selectedServer.streamUrl,
+                                                selectedQuality.quality, 'Auto Update System'
+                                            ]
+                                        );
+                                        console.log(`✅ Added episode ${episodeNumber} for ${details.judul}`);
                                     }
                                 }
                             }
                         }
-
-                        await connection.end();
-
-                    } catch (dbError) {
-                        console.error('Error saat menambahkan ke database:', dbError);
                     }
 
-                    // Update data terakhir yang dinotifikasi
-                    lastNotified[key] = {
-                        timestamp: Date.now(),
-                        data: anime
-                    };
+                    await connection.end();
 
-                    // Simpan ke file
-                    fs.writeFileSync('last_notified.json', JSON.stringify(lastNotified, null, 2));
-
-                    // Tunggu 1 detik sebelum mengirim notifikasi berikutnya
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-
-                } catch (error) {
-                    console.error(`Error mengirim notifikasi untuk ${anime.judul}:`, error);
+                } catch (dbError) {
+                    console.error('Error saat menambahkan ke database:', dbError);
                 }
-            }
-        }
 
-        // Bersihkan data lama (lebih dari 7 hari)
-        const oneWeekAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-        for (const key in lastNotified) {
-            if (lastNotified[key].timestamp < oneWeekAgo) {
-                delete lastNotified[key];
+                // Update data terakhir di memory
+                lastNotifiedAnime = {
+                    judul: latestAnime.judul,
+                    episode: latestAnime.episode,
+                    timestamp: Date.now()
+                };
+
+                console.log(`✅ Notifikasi terkirim untuk ${key}`);
+
+            } catch (error) {
+                console.error(`Error mengirim notifikasi untuk ${latestAnime.judul}:`, error);
             }
+        } else {
+            console.log(`Tidak ada update baru sejak notifikasi terakhir`);
         }
-        fs.writeFileSync('last_notified.json', JSON.stringify(lastNotified, null, 2));
 
     } catch (error) {
         console.error('Error mengecek update anime:', error);
