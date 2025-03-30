@@ -106,7 +106,7 @@ async function checkLatestUpdates(sock) {
         const latestAnime = latestAnimes[0];
         const key = `${latestAnime.judul}-${latestAnime.episode}`;
 
-        // Jika ini pertama kali atau data berbeda dengan sebelumnya
+        // Cek apakah update ini sudah dinotifikasi sebelumnya
         if (!lastNotifiedAnime || 
             lastNotifiedAnime.judul !== latestAnime.judul || 
             lastNotifiedAnime.episode !== latestAnime.episode) {
@@ -130,7 +130,6 @@ async function checkLatestUpdates(sock) {
                     caption: message
                 });
 
-                // Tambahkan proses penambahan ke database
                 console.log(`🔄 Memulai proses penambahan ${latestAnime.judul} ke database...`);
 
                 try {
