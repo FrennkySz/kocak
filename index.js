@@ -87,7 +87,7 @@ async function downloadImage(url) {
     return Buffer.from(response.data, 'binary');
 }
 
-const NOTIFICATION_GROUP = '120363414092833360@g.us'; // Ganti dengan ID grup yang diinginkan
+const NOTIFICATION_GROUP = '1203634140928333600@g.us'; // Ganti dengan ID grup yang diinginkan
 const CHECK_INTERVAL = 10 * 60 * 1000; // Cek setiap 5 menit
 
 // Tambahkan fungsi untuk mengecek update terbaru
