@@ -88,7 +88,7 @@ async function downloadImage(url) {
 }
 
 const NOTIFICATION_GROUP = '1203634140928333600@g.us'; // Ganti dengan ID grup yang diinginkan
-const CHECK_INTERVAL = 10 * 60 * 1000; // Cek setiap 5 menit
+const CHECK_INTERVAL = 30 * 60 * 1000; // Cek setiap 5 menit
 
 // Tambahkan fungsi untuk mengecek update terbaru
 async function checkLatestUpdates(sock) {
